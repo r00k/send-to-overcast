@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Send to Overcast - Options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Send to Overcast</h1>
+      <p>Stored locally in this browser profile.</p>
+
+      <label for="email">Overcast email</label>
+      <input id="email" type="email" autocomplete="username" placeholder="you@example.com" />
+
+      <label for="password">Overcast password</label>
+      <input id="password" type="password" autocomplete="current-password" />
+
+      <button id="saveButton" type="button">Save Credentials</button>
+      <p id="status" aria-live="polite"></p>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>
