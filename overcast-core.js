@@ -18,7 +18,7 @@
       throw new Error("Missing page context.");
     }
 
-    const targetEpisodeTitle = bestValue(pageContext.episodeTitles);
+    const targetEpisodeTitle = bestEpisodeTitle(pageContext.episodeTitles);
     log(logger, `Attempting match for title: ${targetEpisodeTitle || "(none)"}`);
 
     await logIntoOvercast(credentials, fetchImpl);
@@ -121,7 +121,7 @@
         pushUnique(audioURLs, resolved || content);
       }
 
-      if (property === "og:title" || name === "twitter:title") {
+      if (property === "og:title" || name === "twitter:title" || name === "title") {
         pushUnique(episodeTitles, decodeHtml(content));
       }
 
@@ -137,8 +137,23 @@
 
     const docTitle = extractTitle(rawHtml);
     const h1 = extractFirstTagText(rawHtml, "h1");
+    const itempropName = extractTagAttr(rawHtml, "link", "itemprop", "name", "content");
+    const itempropAuthor = extractTagAttr(rawHtml, "meta", "itemprop", "author", "content");
     pushUnique(episodeTitles, h1);
     pushUnique(episodeTitles, docTitle);
+    pushUnique(podcastTitles, itempropName);
+    pushUnique(podcastTitles, itempropAuthor);
+
+    const ownerChannelName = rawHtml.match(/"ownerChannelName":"([^"]+)"/)?.[1];
+    pushUnique(podcastTitles, decodeEscapedString(ownerChannelName));
+
+    const embeddedAppleURLs = extractEscapedApplePodcastURLs(rawHtml);
+    for (const appleURL of embeddedAppleURLs) {
+      const idMatch = appleURL.match(/\bid(\d{5,})\b/i);
+      if (idMatch?.[1]) {
+        pushUnique(applePodcastIDs, idMatch[1]);
+      }
+    }
 
     for (const rawJson of extractJsonLd(rawHtml)) {
       let parsed;
@@ -207,7 +222,7 @@
   }
 
   async function findEpisodeLinkViaSearch(pageContext, fetchImpl, logger = null) {
-    const targetEpisodeTitle = bestValue(pageContext.episodeTitles) || "";
+    const targetEpisodeTitle = bestEpisodeTitle(pageContext.episodeTitles) || "";
     const queries = buildSearchQueries(pageContext);
     log(logger, `Search queries: ${queries.join(" | ") || "(none)"}`);
 
@@ -317,7 +332,7 @@
       }
     }
 
-    const episodeTitle = bestValue(pageContext.episodeTitles) || "";
+    const episodeTitle = bestEpisodeTitle(pageContext.episodeTitles) || "";
     for (const split of episodeTitle.split(/[|\-–—:]/)) {
       push(split);
     }
@@ -549,15 +564,37 @@
       .trim();
   }
 
-  function bestValue(list) {
+  function bestEpisodeTitle(list) {
     if (!Array.isArray(list)) {
       return "";
     }
 
-    return list
+    const candidates = list
       .map((v) => String(v || "").trim())
       .filter(Boolean)
-      .sort((a, b) => b.length - a.length)[0] || "";
+      .filter((value, index, arr) => arr.indexOf(value) === index);
+
+    candidates.sort((a, b) => scoreEpisodeTitleCandidate(b) - scoreEpisodeTitleCandidate(a));
+    return candidates[0] || "";
+  }
+
+  function scoreEpisodeTitleCandidate(value) {
+    const title = String(value || "").trim();
+    if (!title) {
+      return 0;
+    }
+
+    let score = Math.min(title.length, 180);
+    if (/\s-\s*youtube$/i.test(title)) {
+      score -= 45;
+    }
+    if (/\s\|\s*youtube$/i.test(title)) {
+      score -= 35;
+    }
+    if (/apple podcasts?/i.test(title)) {
+      score -= 20;
+    }
+    return score;
   }
 
   function extractTags(html, tagName) {
@@ -585,6 +622,16 @@
     return extractFirstTagText(html, "title");
   }
 
+  function extractTagAttr(html, tagName, filterAttrName, filterAttrValue, targetAttrName) {
+    for (const tag of extractTags(html, tagName)) {
+      const filterValue = readAttr(tag.attrs, filterAttrName).toLowerCase();
+      if (filterValue === String(filterAttrValue || "").toLowerCase()) {
+        return readAttr(tag.attrs, targetAttrName);
+      }
+    }
+    return "";
+  }
+
   function extractJsonLd(html) {
     const out = [];
     const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -595,6 +642,28 @@
       }
     }
     return out;
+  }
+
+  function extractEscapedApplePodcastURLs(html) {
+    const urls = [];
+    const matches = html.match(/https?:\\\/\\\/podcasts\.apple\.com[^"'<>\s]+/gi) || [];
+    for (const raw of matches.slice(0, 12)) {
+      const decoded = raw.replace(/\\\//g, "/");
+      if (!urls.includes(decoded)) {
+        urls.push(decoded);
+      }
+    }
+    return urls;
+  }
+
+  function decodeEscapedString(value) {
+    if (!value) {
+      return "";
+    }
+    return String(value)
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+      .replace(/\\\//g, "/")
+      .replace(/\\"/g, '"');
   }
 
   function readAttr(attrs, name) {

@@ -143,13 +143,19 @@ async function collectPageContext(tabId) {
 
       const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
       const twTitle = document.querySelector('meta[name="twitter:title"]')?.getAttribute("content");
+      const metaTitle = document.querySelector('meta[name="title"]')?.getAttribute("content");
       const siteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content");
+      const itempropName = document.querySelector('link[itemprop="name"]')?.getAttribute("content");
+      const itempropAuthor = document.querySelector('[itemprop="author"]')?.getAttribute("content");
       const h1 = document.querySelector("h1")?.textContent;
       pushUnique(episodeTitles, ogTitle);
       pushUnique(episodeTitles, twTitle);
+      pushUnique(episodeTitles, metaTitle);
       pushUnique(episodeTitles, h1);
       pushUnique(episodeTitles, document.title);
       pushUnique(podcastTitles, siteName);
+      pushUnique(podcastTitles, itempropName);
+      pushUnique(podcastTitles, itempropAuthor);
 
       for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
         const raw = script.textContent || "";
@@ -203,6 +209,20 @@ async function collectPageContext(tabId) {
       const textMatches = bodyText.match(plusReGlobal) || [];
       for (const match of textMatches.slice(0, 8)) {
         push(match, "text", 40);
+      }
+
+      // Some pages (especially YouTube) keep useful links and channel names in embedded JSON.
+      const htmlSnapshot = document.documentElement?.innerHTML || "";
+      const ownerChannelName = htmlSnapshot.match(/"ownerChannelName":"([^"]+)"/)?.[1];
+      pushUnique(podcastTitles, ownerChannelName);
+
+      const appleURLMatches = htmlSnapshot.match(/https?:\\\/\\\/podcasts\.apple\.com[^"'<>\s]+/gi) || [];
+      for (const rawMatch of appleURLMatches.slice(0, 10)) {
+        const decodedURL = rawMatch.replace(/\\\//g, "/");
+        const idMatch = decodedURL.match(/\bid(\d{5,})\b/i);
+        if (idMatch?.[1]) {
+          pushUnique(applePodcastIDs, idMatch[1]);
+        }
       }
 
       const unique = new Map();
