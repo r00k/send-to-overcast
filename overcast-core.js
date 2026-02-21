@@ -147,6 +147,19 @@
     const ownerChannelName = rawHtml.match(/"ownerChannelName":"([^"]+)"/)?.[1];
     pushUnique(podcastTitles, decodeEscapedString(ownerChannelName));
 
+    const shortDescriptionRaw = extractEmbeddedJSONField(rawHtml, "shortDescription");
+    const shortDescription = decodeEscapedString(shortDescriptionRaw);
+    if (shortDescription) {
+      const firstLine = shortDescription.split(/\n+/).map((line) => line.trim()).filter(Boolean)[0] || "";
+      pushUnique(episodeTitles, firstLine);
+
+      const tunedInShow = shortDescription.match(/tune\s+in\s+to\s+([^,\n.!?]{3,120})/i)?.[1];
+      pushUnique(podcastTitles, tunedInShow);
+
+      const podcastNamed = shortDescription.match(/(?:podcast|show)\s*[:\-]\s*([^\n]{3,120})/i)?.[1];
+      pushUnique(podcastTitles, podcastNamed);
+    }
+
     const embeddedAppleURLs = extractEscapedApplePodcastURLs(rawHtml);
     for (const appleURL of embeddedAppleURLs) {
       const idMatch = appleURL.match(/\bid(\d{5,})\b/i);
@@ -253,13 +266,27 @@
     }
 
     const episodeCandidates = [];
+    const orderedPodcastCandidates = Array.from(podcastCandidates.values())
+      .sort((a, b) => {
+        const aCount = Number(a.queryResultCount || Number.POSITIVE_INFINITY);
+        const bCount = Number(b.queryResultCount || Number.POSITIVE_INFINITY);
+        if (aCount !== bCount) {
+          return aCount - bCount;
+        }
+        return String(a.title || "").localeCompare(String(b.title || ""));
+      })
+      .slice(0, 5);
 
-    for (const podcast of podcastCandidates.values()) {
+    for (const podcast of orderedPodcastCandidates) {
       const podcastURL = podcast.directURL;
       const pageResponse = await fetchImpl(podcastURL, {
         method: "GET",
         redirect: "follow"
       });
+
+      if (pageResponse.status === 429) {
+        throw new Error("Overcast is rate-limiting requests right now. Please wait a minute and try again.");
+      }
 
       if (!pageResponse.ok) {
         continue;
@@ -656,12 +683,20 @@
     return urls;
   }
 
+  function extractEmbeddedJSONField(html, fieldName) {
+    const escapedField = String(fieldName || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`"${escapedField}":"([\\s\\S]*?)"(?:,|})`, "i");
+    return html.match(re)?.[1] || "";
+  }
+
   function decodeEscapedString(value) {
     if (!value) {
       return "";
     }
     return String(value)
       .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "")
       .replace(/\\\//g, "/")
       .replace(/\\"/g, '"');
   }

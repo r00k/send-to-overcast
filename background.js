@@ -216,6 +216,25 @@ async function collectPageContext(tabId) {
       const ownerChannelName = htmlSnapshot.match(/"ownerChannelName":"([^"]+)"/)?.[1];
       pushUnique(podcastTitles, ownerChannelName);
 
+      const shortDescriptionRaw = htmlSnapshot.match(/"shortDescription":"([\s\S]*?)"(?:,|})/i)?.[1] || "";
+      const shortDescription = shortDescriptionRaw
+        .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+        .replace(/\\n/g, "\n")
+        .replace(/\\r/g, "")
+        .replace(/\\\//g, "/")
+        .replace(/\\"/g, '"');
+
+      if (shortDescription) {
+        const firstLine = shortDescription.split(/\n+/).map((line) => line.trim()).filter(Boolean)[0] || "";
+        pushUnique(episodeTitles, firstLine);
+
+        const tunedInShow = shortDescription.match(/tune\s+in\s+to\s+([^,\n.!?]{3,120})/i)?.[1];
+        pushUnique(podcastTitles, tunedInShow);
+
+        const podcastNamed = shortDescription.match(/(?:podcast|show)\s*[:\-]\s*([^\n]{3,120})/i)?.[1];
+        pushUnique(podcastTitles, podcastNamed);
+      }
+
       const appleURLMatches = htmlSnapshot.match(/https?:\\\/\\\/podcasts\.apple\.com[^"'<>\s]+/gi) || [];
       for (const rawMatch of appleURLMatches.slice(0, 10)) {
         const decodedURL = rawMatch.replace(/\\\//g, "/");

@@ -4,7 +4,13 @@
   "description": "One-click save of podcast episodes into your Overcast account.",
   "version": "0.1.0",
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
-  "host_permissions": ["https://overcast.fm/*"],
+  "host_permissions": [
+    "https://overcast.fm/*",
+    "https://www.youtube.com/*",
+    "https://youtube.com/*",
+    "https://m.youtube.com/*",
+    "https://youtu.be/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },
