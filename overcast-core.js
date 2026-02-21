@@ -12,7 +12,7 @@
   const MAX_RESULTS_PER_QUERY = 4;
   const MAX_PODCAST_PAGE_FETCHES = 3;
 
-  async function findAndSaveEpisode({ pageContext, credentials, fetchImpl, logger = null }) {
+  async function findAndSaveEpisode({ pageContext, credentials, fetchImpl, anthropicApiKey = "", logger = null }) {
     if (!credentials?.email || !credentials?.password) {
       throw new Error("Missing Overcast credentials.");
     }
@@ -21,7 +21,21 @@
       throw new Error("Missing page context.");
     }
 
-    const targetEpisodeTitle = bestEpisodeTitle(pageContext.episodeTitles);
+    let llmEpisodeTitle = "";
+    if (anthropicApiKey) {
+      const llmResult = await extractPodcastInfoViaLLM(pageContext, anthropicApiKey, fetchImpl, logger);
+      if (llmResult) {
+        if (llmResult.episodeTitle) {
+          llmEpisodeTitle = llmResult.episodeTitle;
+          pageContext.episodeTitles.unshift(llmResult.episodeTitle);
+        }
+        if (llmResult.podcastName) {
+          pageContext.podcastTitles.unshift(llmResult.podcastName);
+        }
+      }
+    }
+
+    const targetEpisodeTitle = llmEpisodeTitle || bestEpisodeTitle(pageContext.episodeTitles);
     log(logger, `Attempting match for title: ${targetEpisodeTitle || "(none)"}`);
 
     await logIntoOvercast(credentials, fetchImpl);
@@ -29,7 +43,7 @@
 
     let detected = pickDirectOvercastLink(pageContext);
     if (!detected) {
-      detected = await findEpisodeLinkViaSearch(pageContext, fetchImpl, logger);
+      detected = await findEpisodeLinkViaSearch(pageContext, targetEpisodeTitle, fetchImpl, logger);
     }
 
     if (!detected?.url) {
@@ -237,8 +251,10 @@
     };
   }
 
-  async function findEpisodeLinkViaSearch(pageContext, fetchImpl, logger = null) {
-    const targetEpisodeTitle = bestEpisodeTitle(pageContext.episodeTitles) || "";
+  async function findEpisodeLinkViaSearch(pageContext, targetEpisodeTitle, fetchImpl, logger = null) {
+    if (!targetEpisodeTitle) {
+      targetEpisodeTitle = bestEpisodeTitle(pageContext.episodeTitles) || "";
+    }
     const queries = buildSearchQueries(pageContext);
     log(logger, `Search queries: ${queries.join(" | ") || "(none)"}`);
 
@@ -344,7 +360,7 @@
 
   function buildSearchQueries(pageContext) {
     const queryScores = new Map();
-    const push = (value) => {
+    const push = (value, boost = 0) => {
       if (!value) {
         return;
       }
@@ -353,7 +369,11 @@
         return;
       }
       const key = compact.toLowerCase();
-      const score = scoreSearchQuery(compact);
+      const baseScore = scoreSearchQuery(compact);
+      if (baseScore <= 0) {
+        return;
+      }
+      const score = baseScore + boost;
       const existing = queryScores.get(key);
       if (!existing || score > existing.score) {
         queryScores.set(key, { value: compact, score });
@@ -361,7 +381,7 @@
     };
 
     for (const p of pageContext.podcastTitles || []) {
-      push(p);
+      push(p, 100);
     }
 
     for (const feedURL of pageContext.feedURLs || []) {
@@ -417,6 +437,10 @@
       method: "GET",
       redirect: "follow"
     });
+
+    if (response.status === 429) {
+      throw new Error("Overcast is rate-limiting requests right now. Please wait a minute and try again.");
+    }
 
     if (!response.ok) {
       return [];
@@ -822,6 +846,66 @@
       .replace(/&nbsp;/g, " ");
   }
 
+  async function extractPodcastInfoViaLLM(pageContext, apiKey, fetchImpl, logger = null) {
+    const prompt = [
+      "Given the following metadata from a web page, identify the podcast name and episode title.",
+      "If this page is not about a podcast episode, return your best guess based on the content.",
+      "",
+      "IMPORTANT: On YouTube, the channel name is often different from the podcast name. The podcast",
+      "name is usually mentioned in the video description (e.g. as a playlist or show name). Look there first.",
+      "",
+      `Page URL: ${pageContext.pageURL || "(unknown)"}`,
+      "",
+      "Episode title candidates:",
+      ...(pageContext.episodeTitles || []).map((t) => `  - ${t}`),
+      "",
+      "Podcast/channel title candidates:",
+      ...(pageContext.podcastTitles || []).map((t) => `  - ${t}`),
+      "",
+      'Respond with ONLY a JSON object: {"podcastName": "...", "episodeTitle": "..."}',
+      "Use empty strings if you cannot determine a value."
+    ].join("\n");
+
+    try {
+      const response = await fetchImpl("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 150,
+          messages: [{ role: "user", content: prompt }]
+        })
+      });
+
+      if (!response.ok) {
+        log(logger, `LLM request failed (HTTP ${response.status}).`);
+        return null;
+      }
+
+      const data = await response.json();
+      const text = data?.content?.[0]?.text || "";
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        log(logger, "LLM response did not contain JSON.");
+        return null;
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      log(logger, `LLM extracted podcast: '${parsed.podcastName || ""}', episode: '${parsed.episodeTitle || ""}'.`);
+      return {
+        podcastName: String(parsed.podcastName || "").trim(),
+        episodeTitle: String(parsed.episodeTitle || "").trim()
+      };
+    } catch (error) {
+      log(logger, `LLM extraction failed: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    }
+  }
+
   function log(logger, message) {
     if (logger && typeof logger === "function") {
       logger(message);
@@ -831,6 +915,12 @@
   return {
     collectPageContextFromHTML,
     findAndSaveEpisode,
-    verifyEpisodePresence
+    verifyEpisodePresence,
+    __test: {
+      buildSearchQueries,
+      bestEpisodeTitle,
+      scoreEpisodeTitleMatch,
+      scoreSearchQuery
+    }
   };
 });

@@ -11,7 +11,8 @@ async function main() {
     process.exit(args.help ? 0 : 1);
   }
 
-  const credentials = readCredentials(args);
+  const settings = readSettings(args);
+  const credentials = { email: settings.email, password: settings.password };
   if (!credentials.email || !credentials.password) {
     throw new Error(
       "Missing credentials. Set OVERCAST_EMAIL / OVERCAST_PASSWORD, pass --email / --password, or create .send-to-overcast.credentials.json"
@@ -37,11 +38,14 @@ async function main() {
     console.log(`  Direct Overcast links: ${(pageContext.overcastLinks || []).length}`);
   }
 
+  const anthropicApiKey = settings.anthropicApiKey;
+
   const startedAt = Date.now();
   const result = await OvercastCore.findAndSaveEpisode({
     pageContext,
     credentials,
     fetchImpl: sessionFetch,
+    anthropicApiKey,
     logger: args.verbose ? (line) => console.log(`[trace] ${line}`) : null
   });
   const durationMs = Date.now() - startedAt;
@@ -104,7 +108,7 @@ function parseArgs(argv) {
   return out;
 }
 
-function readCredentials(args) {
+function readSettings(args) {
   const filePath = path.join(process.cwd(), ".send-to-overcast.credentials.json");
   let fileCreds = {};
   if (fs.existsSync(filePath)) {
@@ -117,7 +121,8 @@ function readCredentials(args) {
 
   return {
     email: String(args.email || process.env.OVERCAST_EMAIL || fileCreds.email || "").trim(),
-    password: String(args.password || process.env.OVERCAST_PASSWORD || fileCreds.password || "")
+    password: String(args.password || process.env.OVERCAST_PASSWORD || fileCreds.password || ""),
+    anthropicApiKey: String(process.env.ANTHROPIC_API_KEY || fileCreds.anthropicApiKey || "").trim()
   };
 }
 

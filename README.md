@@ -64,6 +64,22 @@ Useful options:
 - `--no-verify`: skip post-save verification checks.
 - `--help`: print usage.
 
+## Automated tests
+
+This project uses lightweight tests with Node's built-in test runner (`node:test`).
+
+Run tests:
+
+```bash
+npm test
+```
+
+Current test coverage focuses on matching heuristics in `overcast-core.js`:
+
+- Episode-title selection behavior.
+- Search-query prioritization and generic-term filtering.
+- YouTube metadata extraction from embedded fields.
+
 ## Verification behavior
 
 CLI verification checks:

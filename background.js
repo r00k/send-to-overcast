@@ -12,8 +12,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         throw new Error("No active tab found.");
       }
 
-      const credentials = await getCredentials();
-      if (!credentials.email || !credentials.password) {
+      const settings = await getSettings();
+      if (!settings.email || !settings.password) {
         throw new Error("Missing Overcast credentials. Open extension options to set them.");
       }
 
@@ -24,7 +24,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
       const result = await OvercastCore.findAndSaveEpisode({
         pageContext,
-        credentials,
+        credentials: { email: settings.email, password: settings.password },
+        anthropicApiKey: settings.anthropicApiKey,
         fetchImpl: (url, init = {}) => fetch(url, {
           ...init,
           credentials: "include"
@@ -53,11 +54,12 @@ async function getActiveTab() {
   return tabs[0];
 }
 
-async function getCredentials() {
-  const result = await chrome.storage.local.get(["overcastEmail", "overcastPassword"]);
+async function getSettings() {
+  const result = await chrome.storage.local.get(["overcastEmail", "overcastPassword", "anthropicApiKey"]);
   return {
     email: String(result.overcastEmail || "").trim(),
-    password: String(result.overcastPassword || "")
+    password: String(result.overcastPassword || ""),
+    anthropicApiKey: String(result.anthropicApiKey || "").trim()
   };
 }
 
