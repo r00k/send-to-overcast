@@ -8,6 +8,9 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
   const PLUS_RE_GLOBAL = /https?:\/\/overcast\.fm\/\+[A-Za-z0-9_-]+(?:#[^\s"'<>]*)?/gi;
   const PLUS_RE_EXACT = /^https?:\/\/overcast\.fm\/\+[A-Za-z0-9_-]+(?:#[^\s"'<>]*)?$/i;
+  const MAX_SEARCH_QUERIES = 3;
+  const MAX_RESULTS_PER_QUERY = 4;
+  const MAX_PODCAST_PAGE_FETCHES = 3;
 
   async function findAndSaveEpisode({ pageContext, credentials, fetchImpl, logger = null }) {
     if (!credentials?.email || !credentials?.password) {
@@ -245,10 +248,10 @@
       return null;
     }
 
-    for (const query of queries.slice(0, 4)) {
+    for (const query of queries.slice(0, MAX_SEARCH_QUERIES)) {
       const results = await searchPodcasts(query, fetchImpl);
       log(logger, `Overcast search '${query}' returned ${results.length} result(s).`);
-      for (const result of results.slice(0, 6)) {
+      for (const result of results.slice(0, MAX_RESULTS_PER_QUERY)) {
         const key = `p-${result.id}-${result.hash}`;
         const existing = podcastCandidates.get(key);
         if (!existing) {
@@ -275,7 +278,7 @@
         }
         return String(a.title || "").localeCompare(String(b.title || ""));
       })
-      .slice(0, 5);
+      .slice(0, MAX_PODCAST_PAGE_FETCHES);
 
     for (const podcast of orderedPodcastCandidates) {
       const podcastURL = podcast.directURL;
@@ -295,7 +298,7 @@
       const podcastHtml = await pageResponse.text();
       const links = extractEpisodeLinksFromPodcastPage(podcastHtml);
       const isHighConfidenceCandidate = podcast.queryResultCount === 1;
-      const candidatesToScore = isHighConfidenceCandidate ? links : links.slice(0, 80);
+      const candidatesToScore = isHighConfidenceCandidate ? links.slice(0, 180) : links.slice(0, 50);
       log(logger, `Scoring ${candidatesToScore.length} episode link(s) from ${podcastURL}.`);
 
       for (const link of candidatesToScore) {
@@ -310,6 +313,14 @@
           podcastTitle: podcast.title,
           podcastURL
         });
+
+        if (score >= 105) {
+          log(logger, `Accepting high-confidence exact match: '${link.title}'.`);
+          return {
+            url: link.url,
+            source: `search:${podcast.title || "podcast"}`
+          };
+        }
       }
     }
 
@@ -332,7 +343,7 @@
   }
 
   function buildSearchQueries(pageContext) {
-    const queries = [];
+    const queryScores = new Map();
     const push = (value) => {
       if (!value) {
         return;
@@ -341,8 +352,11 @@
       if (!compact || compact.length < 3) {
         return;
       }
-      if (!queries.includes(compact)) {
-        queries.push(compact);
+      const key = compact.toLowerCase();
+      const score = scoreSearchQuery(compact);
+      const existing = queryScores.get(key);
+      if (!existing || score > existing.score) {
+        queryScores.set(key, { value: compact, score });
       }
     };
 
@@ -365,7 +379,37 @@
     }
 
     push(episodeTitle);
-    return queries;
+
+    return Array.from(queryScores.values())
+      .filter((entry) => entry.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((entry) => entry.value);
+  }
+
+  function scoreSearchQuery(value) {
+    const text = String(value || "").trim();
+    if (!text) {
+      return 0;
+    }
+
+    const lower = text.toLowerCase();
+    const genericTerms = new Set(["youtube", "podcast", "episode", "apple podcasts", "spotify"]);
+    if (genericTerms.has(lower)) {
+      return 0;
+    }
+
+    let score = Math.min(text.length, 80);
+    if (/\b(youtube|apple podcasts?|spotify)\b/i.test(text)) {
+      score -= 25;
+    }
+    if (/[:|\-]/.test(text)) {
+      score += 10;
+    }
+    if (/\b(with|feat\.?|featuring|vision|interview)\b/i.test(text)) {
+      score += 8;
+    }
+
+    return score;
   }
 
   async function searchPodcasts(query, fetchImpl) {
